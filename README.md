@@ -1,12 +1,14 @@
 # Last Email MCP Server
 
-A Python Model Context Protocol (MCP) server that returns the most recently received Microsoft 365 email for the signed-in user. The server uses FastMCP, Microsoft Entra ID authentication, the OAuth 2.0 On-Behalf-Of flow, and Microsoft Graph.
+A Python Model Context Protocol (MCP) server that returns the most recently received Microsoft 365 email for the signed-in user. It is designed to be called by an upstream web application that has already authenticated the user.
+
+The web application obtains a delegated access token for this MCP server through an OAuth 2.0 On-Behalf-Of (OBO) exchange. The MCP server validates that token and performs a second OBO exchange to obtain a delegated Microsoft Graph token.
 
 ## Features
 
 - Streamable HTTP MCP transport
-- Microsoft Entra ID authentication through FastMCP
-- On-Behalf-Of token exchange for delegated Microsoft Graph access
+- Validation of Microsoft Entra ID bearer tokens issued for the MCP server
+- Chained On-Behalf-Of authentication from the web application to the MCP server and Microsoft Graph
 - `get_last_email` tool for retrieving the latest message
 - Health check endpoint
 - Docker support
@@ -15,21 +17,46 @@ A Python Model Context Protocol (MCP) server that returns the most recently rece
 
 - Python 3.13 or later
 - [uv](https://docs.astral.sh/uv/) for local dependency management
-- A Microsoft Entra ID tenant and app registration
+- A Microsoft Entra ID tenant
+- App registrations for the upstream web application and MCP server
 - Docker, if running the container image
+
+## Authentication flow
+
+1. The user authenticates with the upstream web application.
+2. The web application performs an OBO exchange for the MCP server's `user_impersonation` scope.
+3. The web application calls `/mcp` with the resulting access token in the `Authorization: Bearer <token>` header.
+4. The MCP server validates the token's signature, issuer, audience, expiration, and delegated scope.
+5. The MCP server uses the incoming token as the user assertion in another OBO exchange for Microsoft Graph `Mail.Read` access.
+6. The MCP server calls Microsoft Graph on behalf of the user.
+
+The MCP server does not perform interactive user authentication and does not require a redirect URI. Any redirect URI used for the initial user sign-in belongs to the upstream web application.
 
 ## Microsoft Entra ID configuration
 
+### MCP server app registration
+
 Create an app registration for the MCP server and configure it as follows:
 
-1. Under **Expose an API**, add a delegated scope named `user_impersonation`.
-2. Under **API permissions**, add the Microsoft Graph delegated permission `Mail.Read`.
-3. Grant consent for the required permissions according to your tenant's policies.
-4. Create a client secret.
-5. Configure the OAuth redirect URI for the server. FastMCP uses `/auth/callback` by default, so the redirect URI must match the externally reachable server URL and that path.
+1. Under **Expose an API**, set an Application ID URI, typically `api://<mcp-client-id>`.
+2. Add a delegated scope named `user_impersonation`.
+3. Under **API permissions**, add the Microsoft Graph delegated permission `Mail.Read`.
+4. Grant consent for the required permissions according to your tenant's policies.
+5. Create a client secret for the MCP server's OBO exchange with Microsoft Graph.
 6. Configure the app registration to issue version 2 access tokens.
 
-Use delegated permissions rather than Microsoft Graph application permissions. The server accesses Microsoft Graph on behalf of the authenticated user.
+Do not add Microsoft Graph application permissions. The server accesses Graph with the signed-in user's delegated permissions.
+
+### Web application app registration
+
+Configure the upstream web application's app registration as follows:
+
+1. Add delegated access to `api://<mcp-client-id>/user_impersonation`.
+2. Grant consent according to your tenant's policies.
+3. Configure the web application's own user authentication and redirect URI as required by that application.
+4. Use the web application's incoming user token in an OBO exchange for the MCP server scope.
+
+The resulting access token must target the MCP server and contain the `user_impersonation` delegated scope. Send an access token, not an ID token, to the MCP endpoint.
 
 ## Configuration
 
@@ -37,9 +64,9 @@ The following environment variables are required:
 
 | Variable | Description |
 | --- | --- |
-| `ENTRA_CLIENT_ID` | Application (client) ID of the Entra app registration |
-| `ENTRA_CLIENT_SECRET` | Client secret for the Entra app registration |
-| `ENTRA_TENANT_ID` | Directory (tenant) ID containing the app registration |
+| `ENTRA_CLIENT_ID` | Application (client) ID of the MCP server app registration |
+| `ENTRA_CLIENT_SECRET` | MCP server client secret used for the Graph OBO exchange |
+| `ENTRA_TENANT_ID` | Directory (tenant) ID containing the app registrations |
 
 For local development, create `src/.env`:
 

@@ -14,6 +14,3 @@
 # OS shit
 .DS_Store
 .vscode/
-
-# Kubernetes shit
-**/k8s
